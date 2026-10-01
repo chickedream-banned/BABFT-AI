@@ -1,29 +1,97 @@
--- One self-contained client script. Displays compilation/runtime failures.
--- The complete robot source is embedded below; no downloads or extra scripts.
-warn("BABFT_LOADER: запуск")
-local player = game:GetService("Players").LocalPlayer
-assert(player, "Нужен запуск на клиенте")
-local parent = player:WaitForChild("PlayerGui", 5)
-assert(parent, "PlayerGui не найден")
-for _, name in ipairs({ "BABFT_TEST", "BABFT_STARTUP_PROBE", "BabftGeminiLoader" }) do
-    local old = parent:FindFirstChild(name)
-    if old then old:Destroy() end
+-- BABFT v15: one complete script. Paste the file itself into the client runner.
+-- Direct startup: no loadstring, downloads or embedded API key.
+local enteredKey
+local loaderGui, loaderLabel
+local startupStage = "Проверка клиентской среды"
+
+local function showStartupFailure(failure)
+    local message = tostring(failure)
+    if enteredKey and enteredKey ~= "" then
+        while true do
+            local first, last = message:find(enteredKey, 1, true)
+            if not first then break end
+            message = message:sub(1, first - 1) .. "[API_KEY]" .. message:sub(last + 1)
+        end
+    end
+    message = startupStage .. ": " .. message
+    pcall(function()
+        if not loaderLabel or not loaderLabel.Parent then
+            local player = game:GetService("Players").LocalPlayer
+            local parent = player and player:FindFirstChildOfClass("PlayerGui")
+            if not parent then return end
+            loaderGui = Instance.new("ScreenGui")
+            loaderGui.Name, loaderGui.ResetOnSpawn, loaderGui.DisplayOrder = "BabftGeminiLoader", false, 1003
+            loaderLabel = Instance.new("TextLabel")
+            loaderLabel.Size, loaderLabel.Position = UDim2.new(0, 360, 0, 160), UDim2.new(0, 20, 0, 70)
+            loaderLabel.TextColor3, loaderLabel.TextSize, loaderLabel.TextWrapped = Color3.fromRGB(255, 255, 255), 16, true
+            loaderLabel.Parent, loaderGui.Parent = loaderGui, parent
+        end
+        loaderGui.DisplayOrder = 1003
+        loaderLabel.BackgroundColor3 = Color3.fromRGB(120, 35, 35)
+        loaderLabel.Text = "ИИ не запустился:\n" .. message:sub(1, 700)
+    end)
+    if type(warn) == "function" then warn("BABFT_STARTUP: " .. message)
+    elseif type(print) == "function" then print("BABFT_STARTUP: " .. message) end
 end
-local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "BabftGeminiLoader", false, 1001
-local label = Instance.new("TextLabel")
-label.Size, label.Position = UDim2.fromOffset(360, 160), UDim2.fromOffset(20, 70)
-label.BackgroundColor3, label.TextColor3 = Color3.fromRGB(37, 44, 58), Color3.fromRGB(255, 255, 255)
-label.TextSize, label.TextWrapped = 16, true
-label.Text = "Запуск ИИ: проверяю основной код…"
-label.Parent, gui.Parent = gui, parent
-local source = [====[
+
+local function promptApiKey()
+	local player = game:GetService("Players").LocalPlayer
+	assert(player, "Нужен запуск на клиенте")
+	local parent = player:WaitForChild("PlayerGui", 5)
+	assert(parent, "PlayerGui не найден")
+	local scope = type(getgenv) == "function" and getgenv() or _G
+	local previous = scope.__BabftGeminiSignSession
+	if type(previous) == "table" then
+		previous.active = false
+		for _, connection in ipairs(previous.connections or {}) do pcall(function() connection:Disconnect() end) end
+	end
+	local old = parent:FindFirstChild("BabftGeminiApiKey")
+	if old then old:Destroy() end
+	local gui = Instance.new("ScreenGui")
+	gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "BabftGeminiApiKey", false, 1002
+	local frame = Instance.new("Frame")
+	frame.Size, frame.Position = UDim2.fromOffset(360, 176), UDim2.fromOffset(20, 70)
+	frame.BackgroundColor3 = Color3.fromRGB(24, 29, 39)
+	frame.Parent = gui
+	local title = Instance.new("TextLabel")
+	title.Size, title.Position = UDim2.fromOffset(336, 46), UDim2.fromOffset(12, 8)
+	title.BackgroundTransparency, title.TextColor3, title.TextSize = 1, Color3.fromRGB(245, 248, 255), 16
+	title.TextWrapped, title.Text = true, "Введи свой Gemini API-ключ\nКлюч не сохраняется в файл"
+	title.Parent = frame
+	local field = Instance.new("TextBox")
+	field.Name, field.Text, field.PlaceholderText = "ApiKeyInput", "", "Вставь API-ключ сюда"
+	field.Size, field.Position = UDim2.fromOffset(336, 36), UDim2.fromOffset(12, 62)
+	field.ClearTextOnFocus, field.TextSize = false, 16
+	field.BackgroundColor3, field.TextColor3 = Color3.fromRGB(48, 56, 73), Color3.fromRGB(255, 255, 255)
+	field.Parent = frame
+	local button = Instance.new("TextButton")
+	button.Name, button.Text = "StartWithApiKey", "Запустить ИИ"
+	button.Size, button.Position = UDim2.fromOffset(336, 38), UDim2.fromOffset(12, 115)
+	button.BackgroundColor3, button.TextColor3, button.TextSize = Color3.fromRGB(48, 100, 72), Color3.fromRGB(255, 255, 255), 16
+	button.Parent = frame
+	gui.Parent = parent
+	local selected
+	local connection = button.Activated:Connect(function()
+		local value = field.Text:match("^%s*(.-)%s*$")
+		if value == "" or value:find("%s") then title.Text = "Вставь API-ключ без пробелов и переносов"; return end
+		selected = value
+		field.Text = ""
+		pcall(function() field:ReleaseFocus() end)
+	end)
+	while selected == nil and gui.Parent do task.wait(0.1) end
+	connection:Disconnect()
+	field.Text = ""
+	gui:Destroy()
+	return selected
+end
+
+local function runRobot(...)
 -- One client script. Requires a nonstandard request/http_request HTTP function.
 -- An ordinary Roblox Studio LocalScript cannot make these HTTP requests.
 -- Conversation starts immediately. Gemini chooses expressions from normal chat.
 -- Configure the physical body through the optional "Настройка тела" panel.
 -- !ai commands remain available for diagnostics, but are not needed to talk.
-local SCRIPT_VERSION = "BABFT_AGENT v14 API INPUT"
+local SCRIPT_VERSION = "BABFT_AGENT v15 DIRECT START"
 print(SCRIPT_VERSION .. " starting")
 -- Display a startup marker BEFORE service setup, HTTP validation and body work.
 -- Keep it visible on an early failure; replace it with the full panel on success.
@@ -44,11 +112,11 @@ pcall(function()
 	bootLabel = Instance.new("TextLabel")
 	bootLabel.Size, bootLabel.Position = UDim2.fromOffset(340, 60), UDim2.fromOffset(20, 70)
 	bootLabel.BackgroundColor3, bootLabel.TextColor3 = Color3.fromRGB(37, 44, 58), Color3.fromRGB(255, 255, 255)
-	bootLabel.TextSize, bootLabel.TextWrapped, bootLabel.Text = 18, true, "Бип v14: код запущен, подключаюсь…"
+	bootLabel.TextSize, bootLabel.TextWrapped, bootLabel.Text = 18, true, "Бип v15: код запущен, подключаюсь…"
 	bootLabel.Parent, bootGui.Parent = bootGui, parent
 end)
 local function bootStatus(message)
-	if bootLabel then pcall(function() bootLabel.Text = "Бип v14: " .. message end) end
+	if bootLabel then pcall(function() bootLabel.Text = "Бип v15: " .. message end) end
 	print("GeminiBoot: " .. message)
 end
 local HttpService = game:GetService("HttpService")
@@ -1299,70 +1367,4 @@ local function generateReply(sender, message, feedback, chatOnly)
 					.. "result.ok подтверждает только отсутствие ошибки вызова. observedChange — "
 					.. "наблюдение на клиенте, а не подтверждение сервера. "
 					.. "inputBegan/inputEnded показывают события UserInputService, detectorEvents — "
-					.. "локальный MouseClick. Эти счётчики сами по себе не доказывают переключения. "
-					.. "observedChange может означать анимацию, звук или изменение значения. "
-					.. "gateChange — изменение On у Gate с реальной ссылкой ControllerRef на источник. "
-					.. "Каталог поз: " .. HttpService:JSONEncode(poses)
-					.. ". Каталог объектов: " .. HttpService:JSONEncode(catalog) }},
-			},
-			contents = contents,
-			generationConfig = {
-				responseMimeType = "application/json",
-				responseSchema = {
-						type = "OBJECT", required = { "reply", "emotion", "actions" },
-					properties = {
-						reply = { type = "STRING" },
-						emotion = { type = "STRING", enum = { "neutral", "friendly", "happy", "curious", "thoughtful", "sad", "surprised" } },
-						actions = { type = "ARRAY", items = {
-							type = "OBJECT", required = { "target", "action" },
-							properties = { target = { type = "STRING" },
-								action = { type = "STRING", enum = { "activate", "enable", "disable", "pose" } } },
-						} },
-					},
-				},
-			},
-		}),
-	})
-
-	local status = tonumber(response.StatusCode)
-	if not status or status < 200 or status >= 300 then
-		local decodedOk, errorData = pcall(function() return HttpService:JSONDecode(response.Body) end)
-		local detail = decodedOk and type(errorData) == "table" and type(errorData.error) == "table"
-			and errorData.error.message or "Тело ошибки не распознано"
-		error("Gemini: HTTP " .. tostring(response.StatusCode) .. " " .. redact(detail), 0)
-	end
-	local data = HttpService:JSONDecode(response.Body)
-	local candidate = data.candidates and data.candidates[1]
-	local parts = candidate and candidate.content and candidate.content.parts
-	local fragments = {}
-	for _, part in ipairs(parts or {}) do
-		if type(part.text) == "string" and not part.thought then
-			table.insert(fragments, part.text)
-		end
-	end
-	local responseText = table.concat(fragments):gsub("^%s*```[%w]*%s*", ""):gsub("%s*```%s*$", "")
-	if not responseText:find("%S") then
-		error("Gemini вернул пустой ответ: " .. tostring(candidate and candidate.finishReason or "нет кандидата"), 0)
-	end
-	local decodedOk, decoded = pcall(function() return HttpService:JSONDecode(responseText) end)
-	if not decodedOk then
-		if responseText:match("^%s*[%{%[]") then error("Gemini вернул неполный JSON ответа", 0) end
-		decoded = { reply = responseText, actions = {} }
-	elseif type(decoded) == "string" then
-		decoded = { reply = decoded, actions = {} }
-	end
-	if type(decoded) == "table" and decoded.actions == nil then decoded.actions = {} end
-	if type(decoded) ~= "table" or type(decoded.reply) ~= "string"
-		or type(decoded.actions) ~= "table" or not decoded.reply:find("%S") then
-		error("Gemini вернул некорректный JSON ответа.", 0)
-	end
-	local emotions = { neutral = true, friendly = true, happy = true, curious = true,
-		thoughtful = true, sad = true, surprised = true }
-	if type(decoded.emotion) ~= "string" or not emotions[decoded.emotion] then decoded.emotion = session.emotion end
-	return decoded, userTurn, registry, permissions
-end
-
-local function formatSignReply(sender, answer)
-	local prefix = SHOW_SENDER_ON_SIGN and ("@" .. sender.username .. ": ") or ""
-	local answerLimit = math.max(1, MAX_SIGN_CHARACTERS - (utf8.len(prefix) or #prefix))
-	local c
+					.. "локаль
